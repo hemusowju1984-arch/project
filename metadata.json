@@ -1,0 +1,6 @@
+{
+  "name": "Smart AI",
+  "description": "Cross-platform AI-powered Smart Agriculture app with ESP32 IoT, crop disease detection, yield prediction, fertilizer recommendations, expense tracking, weather, and AI agriculture chatbot.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
