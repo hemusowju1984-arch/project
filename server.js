@@ -1,30 +1,50 @@
-require("dotenv").config();
-
 const express = require("express");
 const multer = require("multer");
 
 const app = express();
 
+/* =========================================================
+   CONFIGURATION
+========================================================= */
+
 const PORT = process.env.PORT || 3000;
 
-const GEMINI_MODEL = "gemini-3.5-flash-lite";
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 
 const GEMINI_URL =
   "https://generativelanguage.googleapis.com/v1beta/interactions";
 
+/*
+ * Primary model.
+ * If this model temporarily fails, the server will try
+ * the fallback model automatically.
+ */
+const PRIMARY_MODEL = "gemini-3.8-flash";
+
+const FALLBACK_MODEL = "gemini-2.5-flash-lite";
+
+/* =========================================================
+   MIDDLEWARE
+========================================================= */
+
 app.use(express.json({ limit: "10mb" }));
 
-// ============================================================
-// CORS
-// ============================================================
+/* =========================================================
+   CORS
+========================================================= */
 
 app.use((req, res, next) => {
   res.header("Access-Control-Allow-Origin", "*");
+
   res.header(
     "Access-Control-Allow-Headers",
     "Origin, X-Requested-With, Content-Type, Accept"
   );
-  res.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+
+  res.header(
+    "Access-Control-Allow-Methods",
+    "GET, POST, OPTIONS"
+  );
 
   if (req.method === "OPTIONS") {
     return res.sendStatus(200);
@@ -33,143 +53,115 @@ app.use((req, res, next) => {
   next();
 });
 
-// ============================================================
-// MULTER
-// ============================================================
+/* =========================================================
+   MULTER
+========================================================= */
 
 const upload = multer({
   storage: multer.memoryStorage(),
+
   limits: {
     fileSize: 10 * 1024 * 1024,
   },
 });
 
-// ============================================================
-// GEMINI API KEY
-// ============================================================
-
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+/* =========================================================
+   GEMINI API KEY CHECK
+========================================================= */
 
 if (!GEMINI_API_KEY) {
   console.error("==============================================");
   console.error("ERROR: GEMINI_API_KEY IS MISSING");
+  console.error("Add GEMINI_API_KEY to Render Environment Variables.");
   console.error("==============================================");
 }
 
-// ============================================================
-// HOME
-// ============================================================
+/* =========================================================
+   HOME
+========================================================= */
 
 app.get("/", (req, res) => {
   res.json({
-    message: "Smart Farm Disease AI Server is running",
-    status: "OK",
-    model: GEMINI_MODEL,
-    service: "Cloud Disease Detection API",
+    status: "online",
+    server: "Smart Farm Disease AI",
+    endpoint: "/analyze-disease",
+    health: "/health",
+    primaryModel: PRIMARY_MODEL,
+    fallbackModel: FALLBACK_MODEL,
   });
 });
 
-// ============================================================
-// HEALTH
-// ============================================================
+/* =========================================================
+   HEALTH CHECK
+========================================================= */
 
 app.get("/health", (req, res) => {
   res.json({
     status: "healthy",
     server: "Smart Farm Disease AI",
-    model: GEMINI_MODEL,
+    model: PRIMARY_MODEL,
+    fallbackModel: FALLBACK_MODEL,
   });
 });
 
-// ============================================================
-// DISEASE DETECTION
-// ============================================================
+/* =========================================================
+   DISEASE RESPONSE SCHEMA
+========================================================= */
 
-app.post(
-  "/analyze-disease",
-  upload.single("image"),
-  async (req, res) => {
-    console.log("");
-    console.log("==============================================");
-    console.log("SMART FARM DISEASE AI");
-    console.log("==============================================");
+const diseaseSchema = {
+  type: "object",
 
-    try {
-      // --------------------------------------------------------
-      // CHECK API KEY
-      // --------------------------------------------------------
+  properties: {
+    crop: {
+      type: "string",
+    },
 
-      if (!GEMINI_API_KEY) {
-        return res.status(500).json({
-          error: "Gemini API key is not configured on the server.",
-        });
-      }
+    disease: {
+      type: "string",
+    },
 
-      // --------------------------------------------------------
-      // CHECK IMAGE
-      // --------------------------------------------------------
+    confidence: {
+      type: "number",
+    },
 
-      if (!req.file) {
-        console.log("ERROR: No image received");
+    symptoms: {
+      type: "string",
+    },
 
-        return res.status(400).json({
-          error: "No image uploaded. Please send an image.",
-        });
-      }
+    causes: {
+      type: "string",
+    },
 
-      console.log("Image received:");
-      console.log("File:", req.file.originalname);
-      console.log("Size:", req.file.size, "bytes");
-      console.log("Type:", req.file.mimetype);
+    treatment: {
+      type: "string",
+    },
 
-      // --------------------------------------------------------
-      // MIME TYPE
-      // --------------------------------------------------------
+    prevention: {
+      type: "string",
+    },
+  },
 
-      let mimeType = req.file.mimetype;
+  required: [
+    "crop",
+    "disease",
+    "confidence",
+    "symptoms",
+    "causes",
+    "treatment",
+    "prevention",
+  ],
+};
 
-      if (
-        !mimeType ||
-        mimeType === "application/octet-stream" ||
-        !mimeType.startsWith("image/")
-      ) {
-        const extension = req.file.originalname
-          .split(".")
-          .pop()
-          .toLowerCase();
+/* =========================================================
+   AI PROMPT
+========================================================= */
 
-        const mimeMap = {
-          jpg: "image/jpeg",
-          jpeg: "image/jpeg",
-          png: "image/png",
-          webp: "image/webp",
-          gif: "image/gif",
-          bmp: "image/bmp",
-        };
-
-        mimeType = mimeMap[extension] || "image/jpeg";
-      }
-
-      // --------------------------------------------------------
-      // BASE64
-      // --------------------------------------------------------
-
-      const base64Image = req.file.buffer.toString("base64");
-
-      console.log("Image converted to Base64");
-      console.log("Sending image to Gemini...");
-      console.log("Model:", GEMINI_MODEL);
-
-      // --------------------------------------------------------
-      // PROMPT
-      // --------------------------------------------------------
-
-      const prompt = `
+const DISEASE_PROMPT = `
 You are an expert agricultural plant disease detection AI.
 
 Analyze the uploaded crop or plant image carefully.
 
-Identify:
+Your task is to identify:
 
 1. Crop name
 2. Disease or health condition
@@ -181,346 +173,606 @@ Identify:
 
 IMPORTANT RULES:
 
+- Analyze the actual uploaded image.
 - If the plant appears healthy, disease must be "Healthy".
-- If the image is not a crop/plant leaf or cannot be analyzed,
-  return disease as "Unable to analyze".
-- Do not invent a disease when there is insufficient visual evidence.
+- If the image is not a crop/plant or cannot be analyzed,
+  disease must be "Unable to analyze".
+- Do not invent a disease when visual evidence is insufficient.
 - Use common agricultural disease names.
-- Give practical treatment advice.
-- Confidence must be between 0 and 100.
-- Return ONLY valid JSON.
+- Give practical agricultural treatment advice.
+- Confidence must be a number from 0 to 100.
+- Return ONLY valid JSON matching the requested schema.
 `;
 
-      // ========================================================
-      // CURRENT GEMINI INTERACTIONS API FORMAT
-      // ========================================================
+/* =========================================================
+   MIME TYPE DETECTION
+========================================================= */
 
-      const geminiRequest = {
-        model: GEMINI_MODEL,
+function getMimeType(file) {
+  let mimeType = file.mimetype;
 
-        store: false,
+  if (
+    mimeType &&
+    mimeType.startsWith("image/") &&
+    mimeType !== "application/octet-stream"
+  ) {
+    return mimeType;
+  }
 
-        input: [
-          {
-            type: "user_input",
+  const extension = file.originalname
+    .split(".")
+    .pop()
+    .toLowerCase();
 
-            content: [
-              {
-                type: "text",
-                text: prompt,
-              },
+  const mimeMap = {
+    jpg: "image/jpeg",
+    jpeg: "image/jpeg",
+    png: "image/png",
+    webp: "image/webp",
+    gif: "image/gif",
+    bmp: "image/bmp",
+  };
 
-              {
-                type: "image",
-                data: base64Image,
-                mime_type: mimeType,
-              },
-            ],
-          },
-        ],
+  return mimeMap[extension] || "image/jpeg";
+}
 
-        response_format: {
-          type: "text",
-          mime_type: "application/json",
+/* =========================================================
+   GEMINI REQUEST
+========================================================= */
 
-          schema: {
-            type: "object",
+async function callGemini({
+  model,
+  base64Image,
+  mimeType,
+}) {
+  const requestBody = {
+    model: model,
 
-            properties: {
-              crop: {
-                type: "string",
-              },
+    store: false,
 
-              disease: {
-                type: "string",
-              },
+    input: [
+      {
+        type: "image",
+        mime_type: mimeType,
+        data: base64Image,
+      },
 
-              confidence: {
-                type: "number",
-              },
+      {
+        type: "text",
+        text: DISEASE_PROMPT,
+      },
+    ],
 
-              symptoms: {
-                type: "string",
-              },
+    response_format: {
+      type: "text",
+      mime_type: "application/json",
+      schema: diseaseSchema,
+    },
 
-              causes: {
-                type: "string",
-              },
+    generation_config: {
+      thinking_level: "minimal",
+      max_output_tokens: 2000,
+    },
+  };
 
-              treatment: {
-                type: "string",
-              },
+  console.log("");
+  console.log("----------------------------------------------");
+  console.log("Calling Gemini");
+  console.log("Model:", model);
+  console.log("----------------------------------------------");
 
-              prevention: {
-                type: "string",
-              },
-            },
+  const response = await fetch(GEMINI_URL, {
+    method: "POST",
 
-            required: [
-              "crop",
-              "disease",
-              "confidence",
-              "symptoms",
-              "causes",
-              "treatment",
-              "prevention",
-            ],
-          },
-        },
+    headers: {
+      "Content-Type": "application/json",
+      "x-goog-api-key": GEMINI_API_KEY,
+    },
 
-        generation_config: {
-          thinking_level: "minimal",
-        },
-      };
+    body: JSON.stringify(requestBody),
+  });
 
-      // ========================================================
-      // CALL GEMINI
-      // ========================================================
+  const text = await response.text();
 
-      const geminiResponse = await fetch(GEMINI_URL, {
-        method: "POST",
+  console.log("Gemini HTTP status:", response.status);
 
-        headers: {
-          "Content-Type": "application/json",
-          "x-goog-api-key": GEMINI_API_KEY,
-        },
+  if (!response.ok) {
+    let errorMessage = "Gemini request failed.";
 
-        body: JSON.stringify(geminiRequest),
-      });
+    try {
+      const errorData = JSON.parse(text);
 
+      if (errorData?.error?.message) {
+        errorMessage = errorData.error.message;
+      } else if (errorData?.message) {
+        errorMessage = errorData.message;
+      }
+    } catch (_) {
+      if (text) {
+        errorMessage = text;
+      }
+    }
+
+    const error = new Error(errorMessage);
+
+    error.status = response.status;
+
+    throw error;
+  }
+
+  let data;
+
+  try {
+    data = JSON.parse(text);
+  } catch (_) {
+    throw new Error("Gemini returned invalid JSON response.");
+  }
+
+  return data;
+}
+
+/* =========================================================
+   EXTRACT MODEL TEXT
+========================================================= */
+
+function extractAIText(geminiData) {
+  let aiText = "";
+
+  /*
+   * Current Interactions API response.
+   */
+  if (Array.isArray(geminiData.steps)) {
+    for (const step of geminiData.steps) {
+      if (!step) {
+        continue;
+      }
+
+      if (
+        step.type === "model_output" &&
+        Array.isArray(step.content)
+      ) {
+        for (const content of step.content) {
+          if (typeof content?.text === "string") {
+            aiText += content.text;
+          }
+        }
+      }
+    }
+  }
+
+  /*
+   * output_text fallback.
+   */
+  if (
+    !aiText &&
+    typeof geminiData.output_text === "string"
+  ) {
+    aiText = geminiData.output_text;
+  }
+
+  /*
+   * outputs fallback.
+   */
+  if (!aiText && Array.isArray(geminiData.outputs)) {
+    for (const output of geminiData.outputs) {
+      if (!output) {
+        continue;
+      }
+
+      if (typeof output.text === "string") {
+        aiText += output.text;
+      }
+
+      if (Array.isArray(output.content)) {
+        for (const content of output.content) {
+          if (typeof content?.text === "string") {
+            aiText += content.text;
+          }
+        }
+      }
+    }
+  }
+
+  /*
+   * Simple text fallback.
+   */
+  if (
+    !aiText &&
+    typeof geminiData.text === "string"
+  ) {
+    aiText = geminiData.text;
+  }
+
+  return aiText.trim();
+}
+
+/* =========================================================
+   CLEAN AI JSON
+========================================================= */
+
+function parseAIResult(aiText) {
+  if (!aiText) {
+    throw new Error(
+      "Gemini returned an empty disease analysis."
+    );
+  }
+
+  let cleaned = aiText
+    .replace(/```json/gi, "")
+    .replace(/```/g, "")
+    .trim();
+
+  /*
+   * Find JSON object if Gemini adds extra text.
+   */
+  const firstBrace = cleaned.indexOf("{");
+  const lastBrace = cleaned.lastIndexOf("}");
+
+  if (
+    firstBrace !== -1 &&
+    lastBrace !== -1 &&
+    lastBrace > firstBrace
+  ) {
+    cleaned = cleaned.substring(
+      firstBrace,
+      lastBrace + 1
+    );
+  }
+
+  return JSON.parse(cleaned);
+}
+
+/* =========================================================
+   NORMALIZE RESULT
+========================================================= */
+
+function normalizeResult(result) {
+  let confidence = Number(result.confidence);
+
+  if (Number.isNaN(confidence)) {
+    confidence = 0;
+  }
+
+  /*
+   * Sometimes AI returns 0.95 instead of 95.
+   */
+  if (confidence > 0 && confidence <= 1) {
+    confidence = confidence * 100;
+  }
+
+  confidence = Math.max(
+    0,
+    Math.min(100, confidence)
+  );
+
+  return {
+    crop: String(
+      result.crop || "Unknown"
+    ),
+
+    disease: String(
+      result.disease || "Unable to analyze"
+    ),
+
+    confidence: Number(
+      confidence.toFixed(1)
+    ),
+
+    symptoms: String(
+      result.symptoms ||
+        "No information available."
+    ),
+
+    causes: String(
+      result.causes ||
+        "No information available."
+    ),
+
+    treatment: String(
+      result.treatment ||
+        "No information available."
+    ),
+
+    prevention: String(
+      result.prevention ||
+        "No information available."
+    ),
+  };
+}
+
+/* =========================================================
+   SHOULD RETRY
+========================================================= */
+
+function shouldRetry(error) {
+  const status = Number(error.status || 0);
+
+  const message = String(
+    error.message || ""
+  ).toLowerCase();
+
+  /*
+   * Temporary server/rate-limit conditions.
+   */
+  if (
+    status === 429 ||
+    status === 500 ||
+    status === 502 ||
+    status === 503 ||
+    status === 504
+  ) {
+    return true;
+  }
+
+  /*
+   * Gemini high-demand message.
+   */
+  if (
+    message.includes("high demand") ||
+    message.includes("temporarily") ||
+    message.includes("try again later") ||
+    message.includes("overloaded")
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+/* =========================================================
+   WAIT
+========================================================= */
+
+function sleep(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+/* =========================================================
+   GEMINI WITH RETRY + FALLBACK
+========================================================= */
+
+async function analyzeWithGemini({
+  base64Image,
+  mimeType,
+}) {
+  let lastError = null;
+
+  /*
+   * -------------------------------------------------------
+   * PRIMARY MODEL
+   * -------------------------------------------------------
+   */
+
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
       console.log(
-        "Gemini HTTP status:",
-        geminiResponse.status
+        `Primary model attempt ${attempt}/2`
       );
 
-      const geminiText = await geminiResponse.text();
+      const data = await callGemini({
+        model: PRIMARY_MODEL,
+        base64Image,
+        mimeType,
+      });
 
-      // ========================================================
-      // GEMINI ERROR
-      // ========================================================
+      return data;
+    } catch (error) {
+      lastError = error;
 
-      if (!geminiResponse.ok) {
-        console.error("Gemini error:");
-        console.error(geminiText);
+      console.error(
+        "Primary model failed:",
+        error.message
+      );
 
-        let errorMessage = "Gemini AI request failed.";
+      if (!shouldRetry(error)) {
+        break;
+      }
 
-        try {
-          const errorData = JSON.parse(geminiText);
+      if (attempt < 2) {
+        console.log(
+          "Temporary error. Retrying primary model..."
+        );
 
-          if (errorData.error?.message) {
-            errorMessage = errorData.error.message;
-          }
+        await sleep(1500);
+      }
+    }
+  }
 
-          if (errorData.message) {
-            errorMessage = errorData.message;
-          }
-        } catch (_) {}
+  /*
+   * -------------------------------------------------------
+   * FALLBACK MODEL
+   * -------------------------------------------------------
+   */
 
-        if (geminiResponse.status === 429) {
-          return res.status(429).json({
-            error:
-              "Gemini API quota/rate limit exceeded. Please try again later.",
-            details: errorMessage,
-          });
-        }
+  console.log(
+    "Trying fallback model:",
+    FALLBACK_MODEL
+  );
 
-        return res.status(502).json({
-          error: errorMessage,
+  try {
+    const data = await callGemini({
+      model: FALLBACK_MODEL,
+      base64Image,
+      mimeType,
+    });
+
+    return data;
+  } catch (error) {
+    lastError = error;
+
+    console.error(
+      "Fallback model failed:",
+      error.message
+    );
+  }
+
+  throw lastError ||
+    new Error("All Gemini models failed.");
+}
+
+/* =========================================================
+   DISEASE DETECTION
+========================================================= */
+
+app.post(
+  "/analyze-disease",
+  upload.single("image"),
+  async (req, res) => {
+    console.log("");
+    console.log("==============================================");
+    console.log("SMART FARM DISEASE AI");
+    console.log("==============================================");
+
+    try {
+      /*
+       * ---------------------------------------------------
+       * API KEY
+       * ---------------------------------------------------
+       */
+
+      if (!GEMINI_API_KEY) {
+        return res.status(500).json({
+          error:
+            "Gemini API key is not configured on the server.",
         });
       }
 
-      // ========================================================
-      // PARSE GEMINI RESPONSE
-      // ========================================================
+      /*
+       * ---------------------------------------------------
+       * IMAGE
+       * ---------------------------------------------------
+       */
 
-      let geminiData;
+      if (!req.file) {
+        console.log(
+          "ERROR: No image received"
+        );
 
-      try {
-        geminiData = JSON.parse(geminiText);
-      } catch (error) {
-        console.error("Could not parse Gemini response.");
-
-        return res.status(502).json({
-          error: "Gemini returned invalid response data.",
+        return res.status(400).json({
+          error:
+            "No image uploaded. Please send an image.",
         });
       }
 
-      // ========================================================
-      // CURRENT API RESPONSE = steps
-      // ========================================================
+      console.log(
+        "Image received:",
+        req.file.originalname
+      );
 
-      let aiText = "";
+      console.log(
+        "Image size:",
+        req.file.size,
+        "bytes"
+      );
 
-      if (Array.isArray(geminiData.steps)) {
-        for (const step of geminiData.steps) {
-          if (!step) {
-            continue;
-          }
+      console.log(
+        "Image type:",
+        req.file.mimetype
+      );
 
-          if (
-            step.type === "model_output" &&
-            Array.isArray(step.content)
-          ) {
-            for (const content of step.content) {
-              if (typeof content?.text === "string") {
-                aiText += content.text;
-              }
-            }
-          }
-        }
-      }
+      /*
+       * ---------------------------------------------------
+       * MIME TYPE
+       * ---------------------------------------------------
+       */
 
-      // ========================================================
-      // COMPATIBILITY FALLBACKS
-      // ========================================================
+      const mimeType = getMimeType(req.file);
 
-      if (!aiText && Array.isArray(geminiData.outputs)) {
-        for (const output of geminiData.outputs) {
-          if (!output) {
-            continue;
-          }
+      console.log(
+        "Using MIME type:",
+        mimeType
+      );
 
-          if (typeof output.text === "string") {
-            aiText += output.text;
-          }
+      /*
+       * ---------------------------------------------------
+       * BASE64
+       * ---------------------------------------------------
+       */
 
-          if (Array.isArray(output.content)) {
-            for (const content of output.content) {
-              if (typeof content?.text === "string") {
-                aiText += content.text;
-              }
-            }
-          }
-        }
-      }
+      const base64Image =
+        req.file.buffer.toString("base64");
 
-      if (
-        !aiText &&
-        typeof geminiData.output_text === "string"
-      ) {
-        aiText = geminiData.output_text;
-      }
+      console.log(
+        "Image converted to Base64."
+      );
 
-      if (
-        !aiText &&
-        typeof geminiData.text === "string"
-      ) {
-        aiText = geminiData.text;
-      }
+      console.log(
+        "Base64 length:",
+        base64Image.length
+      );
 
-      aiText = aiText.trim();
+      /*
+       * ---------------------------------------------------
+       * GEMINI
+       * ---------------------------------------------------
+       */
 
+      const geminiData =
+        await analyzeWithGemini({
+          base64Image,
+          mimeType,
+        });
+
+      /*
+       * ---------------------------------------------------
+       * EXTRACT TEXT
+       * ---------------------------------------------------
+       */
+
+      const aiText =
+        extractAIText(geminiData);
+
+      console.log("");
       console.log("Gemini AI response:");
       console.log(aiText);
 
-      // ========================================================
-      // EMPTY RESPONSE
-      // ========================================================
+      /*
+       * ---------------------------------------------------
+       * PARSE JSON
+       * ---------------------------------------------------
+       */
 
-      if (!aiText) {
-        return res.status(502).json({
-          error: "Gemini returned an empty response.",
-        });
-      }
-
-      // ========================================================
-      // PARSE AI JSON
-      // ========================================================
-
-      let result;
+      let parsedResult;
 
       try {
-        let cleaned = aiText
-          .replace(/```json/gi, "")
-          .replace(/```/g, "")
-          .trim();
-
-        const firstBrace = cleaned.indexOf("{");
-        const lastBrace = cleaned.lastIndexOf("}");
-
-        if (
-          firstBrace !== -1 &&
-          lastBrace !== -1
-        ) {
-          cleaned = cleaned.substring(
-            firstBrace,
-            lastBrace + 1
-          );
-        }
-
-        result = JSON.parse(cleaned);
+        parsedResult =
+          parseAIResult(aiText);
       } catch (error) {
-        console.error("AI JSON parsing failed:");
-        console.error(aiText);
+        console.error(
+          "AI JSON parsing failed:"
+        );
+
+        console.error(
+          error.message
+        );
+
+        console.error(
+          "Raw AI text:",
+          aiText
+        );
 
         return res.status(502).json({
           error:
             "AI returned invalid disease analysis data.",
-          raw: aiText,
         });
       }
 
-      // ========================================================
-      // CONFIDENCE
-      // ========================================================
+      /*
+       * ---------------------------------------------------
+       * NORMALIZE
+       * ---------------------------------------------------
+       */
 
-      let confidence = Number(result.confidence);
+      const finalResult =
+        normalizeResult(parsedResult);
 
-      if (Number.isNaN(confidence)) {
-        confidence = 0;
-      }
-
-      if (confidence <= 1) {
-        confidence = confidence * 100;
-      }
-
-      confidence = Math.max(
-        0,
-        Math.min(100, confidence)
-      );
-
-      // ========================================================
-      // FINAL RESULT
-      // ========================================================
-
-      const finalResult = {
-        crop: String(
-          result.crop || "Unknown"
-        ),
-
-        disease: String(
-          result.disease || "Unable to analyze"
-        ),
-
-        confidence: Number(
-          confidence.toFixed(1)
-        ),
-
-        symptoms: String(
-          result.symptoms ||
-            "No information available."
-        ),
-
-        causes: String(
-          result.causes ||
-            "No information available."
-        ),
-
-        treatment: String(
-          result.treatment ||
-            "No information available."
-        ),
-
-        prevention: String(
-          result.prevention ||
-            "No information available."
-        ),
-      };
-
-      // ========================================================
-      // SUCCESS
-      // ========================================================
+      /*
+       * ---------------------------------------------------
+       * SUCCESS
+       * ---------------------------------------------------
+       */
 
       console.log("");
       console.log("==============================================");
@@ -545,28 +797,79 @@ IMPORTANT RULES:
       console.log("==============================================");
       console.log("");
 
-      return res.status(200).json(finalResult);
-
+      return res.status(200).json(
+        finalResult
+      );
     } catch (error) {
+      /*
+       * ---------------------------------------------------
+       * ERROR HANDLING
+       * ---------------------------------------------------
+       */
+
       console.error("");
       console.error("==============================================");
       console.error("DISEASE AI ERROR");
       console.error("==============================================");
-      console.error(error);
+
+      console.error(
+        "Status:",
+        error.status || "unknown"
+      );
+
+      console.error(
+        "Error:",
+        error.message
+      );
+
       console.error("==============================================");
       console.error("");
 
+      const status = Number(
+        error.status || 0
+      );
+
+      /*
+       * Rate limit
+       */
+      if (status === 429) {
+        return res.status(429).json({
+          error:
+            "Gemini API quota or rate limit exceeded. Please try again later.",
+        });
+      }
+
+      /*
+       * Temporary Gemini overload
+       */
+      if (
+        status === 500 ||
+        status === 502 ||
+        status === 503 ||
+        status === 504 ||
+        String(error.message)
+          .toLowerCase()
+          .includes("high demand")
+      ) {
+        return res.status(502).json({
+          error:
+            "Gemini AI is temporarily unavailable. Please try again in a moment.",
+        });
+      }
+
       return res.status(500).json({
-        error: "Disease detection failed.",
-        details: error.message,
+        error:
+          "Disease detection failed.",
+        details:
+          error.message,
       });
     }
   }
 );
 
-// ============================================================
-// 404
-// ============================================================
+/* =========================================================
+   404 HANDLER
+========================================================= */
 
 app.use((req, res) => {
   res.status(404).json({
@@ -580,38 +883,50 @@ app.use((req, res) => {
   });
 });
 
-// ============================================================
-// START SERVER
-// ============================================================
+/* =========================================================
+   START SERVER
+========================================================= */
 
-app.listen(PORT, "0.0.0.0", () => {
-  console.log("");
-  console.log("==============================================");
-  console.log("       SMART FARM DISEASE AI SERVER");
-  console.log("==============================================");
+app.listen(
+  PORT,
+  "0.0.0.0",
+  () => {
+    console.log("");
+    console.log("==============================================");
+    console.log("       SMART FARM DISEASE AI SERVER");
+    console.log("==============================================");
 
-  console.log(
-    "Server running on port:",
-    PORT
-  );
+    console.log(
+      "Server running on port:",
+      PORT
+    );
 
-  console.log(
-    "Endpoint: POST /analyze-disease"
-  );
+    console.log(
+      "Endpoint: POST /analyze-disease"
+    );
 
-  console.log(
-    "Health: GET /health"
-  );
+    console.log(
+      "Health: GET /health"
+    );
 
-  console.log(
-    "Model:",
-    GEMINI_MODEL
-  );
+    console.log(
+      "Primary model:",
+      PRIMARY_MODEL
+    );
 
-  console.log(
-    "Gemini Cloud: CONNECTED CONFIGURATION"
-  );
+    console.log(
+      "Fallback model:",
+      FALLBACK_MODEL
+    );
 
-  console.log("==============================================");
-  console.log("");
-});
+    console.log(
+      "Gemini API:",
+      GEMINI_API_KEY
+        ? "CONFIGURED"
+        : "NOT CONFIGURED"
+    );
+
+    console.log("==============================================");
+    console.log("");
+  }
+);
