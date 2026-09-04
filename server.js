@@ -16,12 +16,13 @@ const GEMINI_URL =
 
 /*
  * Primary model.
- * If this model temporarily fails, the server will try
- * the fallback model automatically.
  */
 const PRIMARY_MODEL = "gemini-3.8-flash";
 
-const FALLBACK_MODEL = "gemini-2.5-flash-lite";
+/*
+ * Fallback model.
+ */
+const FALLBACK_MODEL = "gemini-3.5-flash-lite";
 
 /* =========================================================
    MIDDLEWARE
@@ -249,8 +250,16 @@ async function callGemini({
       schema: diseaseSchema,
     },
 
+    /*
+     * IMPORTANT:
+     * Do not use thinking_level: "minimal".
+     *
+     * gemini-3.8-flash only supports:
+     * high, low, medium
+     *
+     * We are leaving it out completely.
+     */
     generation_config: {
-      thinking_level: "minimal",
       max_output_tokens: 2000,
     },
   };
@@ -321,6 +330,7 @@ function extractAIText(geminiData) {
   /*
    * Current Interactions API response.
    */
+
   if (Array.isArray(geminiData.steps)) {
     for (const step of geminiData.steps) {
       if (!step) {
@@ -343,6 +353,7 @@ function extractAIText(geminiData) {
   /*
    * output_text fallback.
    */
+
   if (
     !aiText &&
     typeof geminiData.output_text === "string"
@@ -353,7 +364,11 @@ function extractAIText(geminiData) {
   /*
    * outputs fallback.
    */
-  if (!aiText && Array.isArray(geminiData.outputs)) {
+
+  if (
+    !aiText &&
+    Array.isArray(geminiData.outputs)
+  ) {
     for (const output of geminiData.outputs) {
       if (!output) {
         continue;
@@ -376,6 +391,7 @@ function extractAIText(geminiData) {
   /*
    * Simple text fallback.
    */
+
   if (
     !aiText &&
     typeof geminiData.text === "string"
@@ -405,6 +421,7 @@ function parseAIResult(aiText) {
   /*
    * Find JSON object if Gemini adds extra text.
    */
+
   const firstBrace = cleaned.indexOf("{");
   const lastBrace = cleaned.lastIndexOf("}");
 
@@ -436,7 +453,11 @@ function normalizeResult(result) {
   /*
    * Sometimes AI returns 0.95 instead of 95.
    */
-  if (confidence > 0 && confidence <= 1) {
+
+  if (
+    confidence > 0 &&
+    confidence <= 1
+  ) {
     confidence = confidence * 100;
   }
 
@@ -485,7 +506,9 @@ function normalizeResult(result) {
 ========================================================= */
 
 function shouldRetry(error) {
-  const status = Number(error.status || 0);
+  const status = Number(
+    error.status || 0
+  );
 
   const message = String(
     error.message || ""
@@ -494,6 +517,7 @@ function shouldRetry(error) {
   /*
    * Temporary server/rate-limit conditions.
    */
+
   if (
     status === 429 ||
     status === 500 ||
@@ -507,6 +531,7 @@ function shouldRetry(error) {
   /*
    * Gemini high-demand message.
    */
+
   if (
     message.includes("high demand") ||
     message.includes("temporarily") ||
@@ -545,7 +570,11 @@ async function analyzeWithGemini({
    * -------------------------------------------------------
    */
 
-  for (let attempt = 1; attempt <= 2; attempt++) {
+  for (
+    let attempt = 1;
+    attempt <= 2;
+    attempt++
+  ) {
     try {
       console.log(
         `Primary model attempt ${attempt}/2`
@@ -608,8 +637,10 @@ async function analyzeWithGemini({
     );
   }
 
-  throw lastError ||
-    new Error("All Gemini models failed.");
+  throw (
+    lastError ||
+    new Error("All Gemini models failed.")
+  );
 }
 
 /* =========================================================
@@ -678,7 +709,8 @@ app.post(
        * ---------------------------------------------------
        */
 
-      const mimeType = getMimeType(req.file);
+      const mimeType =
+        getMimeType(req.file);
 
       console.log(
         "Using MIME type:",
@@ -692,7 +724,9 @@ app.post(
        */
 
       const base64Image =
-        req.file.buffer.toString("base64");
+        req.file.buffer.toString(
+          "base64"
+        );
 
       console.log(
         "Image converted to Base64."
@@ -725,7 +759,10 @@ app.post(
         extractAIText(geminiData);
 
       console.log("");
-      console.log("Gemini AI response:");
+      console.log(
+        "Gemini AI response:"
+      );
+
       console.log(aiText);
 
       /*
@@ -766,7 +803,9 @@ app.post(
        */
 
       const finalResult =
-        normalizeResult(parsedResult);
+        normalizeResult(
+          parsedResult
+        );
 
       /*
        * ---------------------------------------------------
@@ -775,9 +814,17 @@ app.post(
        */
 
       console.log("");
-      console.log("==============================================");
-      console.log("DISEASE AI SUCCESS");
-      console.log("==============================================");
+      console.log(
+        "=============================================="
+      );
+
+      console.log(
+        "DISEASE AI SUCCESS"
+      );
+
+      console.log(
+        "=============================================="
+      );
 
       console.log(
         "CROP:",
@@ -794,7 +841,10 @@ app.post(
         finalResult.confidence + "%"
       );
 
-      console.log("==============================================");
+      console.log(
+        "=============================================="
+      );
+
       console.log("");
 
       return res.status(200).json(
@@ -808,9 +858,18 @@ app.post(
        */
 
       console.error("");
-      console.error("==============================================");
-      console.error("DISEASE AI ERROR");
-      console.error("==============================================");
+
+      console.error(
+        "=============================================="
+      );
+
+      console.error(
+        "DISEASE AI ERROR"
+      );
+
+      console.error(
+        "=============================================="
+      );
 
       console.error(
         "Status:",
@@ -822,7 +881,10 @@ app.post(
         error.message
       );
 
-      console.error("==============================================");
+      console.error(
+        "=============================================="
+      );
+
       console.error("");
 
       const status = Number(
@@ -832,6 +894,7 @@ app.post(
       /*
        * Rate limit
        */
+
       if (status === 429) {
         return res.status(429).json({
           error:
@@ -842,6 +905,7 @@ app.post(
       /*
        * Temporary Gemini overload
        */
+
       if (
         status === 500 ||
         status === 502 ||
@@ -892,9 +956,18 @@ app.listen(
   "0.0.0.0",
   () => {
     console.log("");
-    console.log("==============================================");
-    console.log("       SMART FARM DISEASE AI SERVER");
-    console.log("==============================================");
+
+    console.log(
+      "=============================================="
+    );
+
+    console.log(
+      "       SMART FARM DISEASE AI SERVER"
+    );
+
+    console.log(
+      "=============================================="
+    );
 
     console.log(
       "Server running on port:",
@@ -926,7 +999,10 @@ app.listen(
         : "NOT CONFIGURED"
     );
 
-    console.log("==============================================");
+    console.log(
+      "=============================================="
+    );
+
     console.log("");
   }
 );
